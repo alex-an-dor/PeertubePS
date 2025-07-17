@@ -14,15 +14,20 @@
 Function ConvertTo-PtVideo {
     [CmdletBinding()]
     param(
+        [parameter(ValueFromPipeline)]
         $InputObject
     )
 
     Begin {
-
+        Write-Debug "PeertubePS.Video converter invoked"
     }
 
     Process {
-
+        foreach ($i in $InputObject) {
+            $PtVideo = [PSCustomObject]$i
+            $PtVideo.psobject.TypeNames.Insert(0, "PeertubePS.Video")
+            Write-Output $PtVideo
+        }
     }
 
     End {
@@ -55,7 +60,7 @@ Function Invoke-PtApiRequestSimple {
     }
 
     try {
-        $Response = Invoke-RestMethod @RestParams
+        $Response = Invoke-WebRequest @RestParams
         return $Response
     }
     catch {
@@ -104,11 +109,11 @@ Function Invoke-PtApiRequest {
     }
 
     $RestParams = @{
-        Uri                     = $Uri
-        Method                  = $Method
-        Headers                 = $Headers
-        StatusCodeVariable      = "StatusCode"
-        ResponseHeadersVariable = "RespHeaders"
+        Uri     = $Uri
+        Method  = $Method
+        Headers = $Headers
+        #StatusCodeVariable      = "StatusCode"
+        #ResponseHeadersVariable = "RespHeaders"
     }
     Write-Verbose "Request Uri: $($RestParams.Uri)"
 
@@ -142,15 +147,20 @@ Function Invoke-PtApiRequest {
     $Count = 15 # page size
 
     try {
-        $Response = Invoke-RestMethod @RestParams
+        $Response = Invoke-WebRequest @RestParams
+        $Result = [ordered]@{}
+        $TextInfo = (Get-Culture).TextInfo
+        ($Response.Content | ConvertFrom-Json -AsHashtable).GetEnumerator() | ForEach-Object {
+            $Result[$TextInfo.ToTitleCase($_.Key)] = $_.Value
+        }
         Write-Debug "Last request's status code: $StatusCode"
         Write-Debug "Last request's response headers: $($RespHeaders | Out-String)"
 
-        if ($Response.total -and ($Response.total -gt $Response.data.count)) {
+        if ($Result.total -and ($Result.total -gt $Result.data.count)) {
             $Results = @()
-            $Results += $Response.data
+            $Results += $Result.data
 
-            Write-Debug "Invoking paging. Total: $($Response.total). On the page: $($Response.Data.Count)"
+            Write-Debug "Invoking paging. Total: $($Result.total). On the page: $($Result.Data.Count)"
             do {
                 $Start += $Count
                 $QParams = @{}
@@ -168,31 +178,35 @@ Function Invoke-PtApiRequest {
                 Write-Debug "New paging request params: $($RestParams | Out-String)"
                 # Make the API request
                 try {
-                    $Response = Invoke-RestMethod @RestParams
+                    $Response = Invoke-WebRequest @RestParams
+                    $Result = [ordered]@{}
+                    ($Response.Content | ConvertFrom-Json -AsHashtable).GetEnumerator() | ForEach-Object {
+                        $Result[$TextInfo.ToTitleCase($_.Key)] = $_.Value
+                    }
                 }
                 catch {
                     break
                 }
 
                 # Add response data to results
-                $Results += $Response.data
-            } while ($Response.total -gt $Results.Count)
+                $Results += $Result.data
+            } while ($Result.total -gt $Results.Count)
 
             if ($PassThruRespHeaders) {
-                return $RespHeaders
+                return $Response.Headers
             }
             return $Results
         }
         else {
             if ($PassThruRespHeaders) {
-                return $RespHeaders
+                return $Response.Headers
             }
 
-            if ($Response.data) {
-                return $Response.data
+            if ($Result.data) {
+                return $Result.data
             }
 
-            return $Response
+            return $Result
         }
     }
     catch {
@@ -285,7 +299,7 @@ Function Get-PtAccountVideos {
     Write-Debug "PSBoundParameters: $($PSBoundParameters | Out-String)"
 
     $Url = "$($PtConfig.ApiUrl)/accounts/$Name/videos"
-    $Result = Invoke-PtApiRequest -Uri $Url
+    $Result = Invoke-PtApiRequest -Uri $Url | ConvertTo-PtVideo
 
     return $Result
 }
@@ -331,7 +345,7 @@ Function Get-PtVideo {
         $Url += "/$Id"
     }
 
-    $Result = Invoke-PtApiRequest -Uri $Url
+    $Result = Invoke-PtApiRequest -Uri $Url | ConvertTo-PtVideo
 
     return $Result
 }
