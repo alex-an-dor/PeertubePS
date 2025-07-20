@@ -11,32 +11,36 @@
 }
 
 #region Converters
-Function ConvertTo-PtVideo {
+Function ConvertTo-PtObject {
+    # no need for separate converters for now - 
+    #   most of returned JSONs can mostly be displayed as is
     [CmdletBinding()]
     param(
         [parameter(ValueFromPipeline)]
-        $InputObject
+        $InputObject,
+
+        [parameter(Mandatory = $true)]
+        [String]
+        $Type
     )
 
     Begin {
-        Write-Debug "PeertubePS.Video converter invoked"
+        Write-Debug "PeertubePS.$Type converter invoked"
     }
 
     Process {
         foreach ($i in $InputObject) {
-            $PtVideo = [PSCustomObject]$i
-            $PtVideo.psobject.TypeNames.Insert(0, "PeertubePS.Video")
-            Write-Output $PtVideo
+            $PtObj = [PSCustomObject]$i
+            $PtObj.psobject.TypeNames.Insert(0, "PeertubePS.$Type")
+            Write-Output $PtObj
         }
-    }
-
-    End {
-
     }
 }
 #endregion Converters
 
+#region API functions
 Function Invoke-PtApiRequestSimple {
+    # needed for a simpler debug process to just shoot a method to an endpoint
     [CmdletBinding()]
     param(
         [uri]
@@ -213,7 +217,9 @@ Function Invoke-PtApiRequest {
         Write-Error $_
     }
 }
+#enregion API functions
 
+#region Helper functions
 Function Set-PtSettings {
     [CmdletBinding()]
     param(
@@ -227,11 +233,10 @@ Function Set-PtSettings {
     $Client = Invoke-RestMethod -Uri $("$Url" + "api/v1/oauth-clients/local")
 
     try {
-        $TokenBody = "client_id=$($Client.client_id)&client_secret=$($Client.client_secret)" + `
-            "&grant_type=password&response_type=code" + `
-            "&username=$($User.UserName)&password=$($User.Password | ConvertFrom-SecureString -AsPlainText)"
+        $TokenBody = -join ("client_id=$($Client.client_id)&client_secret=$($Client.client_secret)",
+            "&grant_type=password&response_type=code",
+            "&username=$($User.UserName)&password=$($User.Password | ConvertFrom-SecureString -AsPlainText)")
         $Token = Invoke-RestMethod -Uri $("$Url" + "api/v1/users/token") -Method POST -Body $TokenBody
-
         
         $PtConfig.Url = $Url
         $PtConfig.ApiUrl = $Url.ToString().TrimEnd("/") + "/api/v1"
@@ -242,13 +247,15 @@ Function Set-PtSettings {
         $PtConfig.Token.RefreshExpiresIn = $Token.refresh_token_expires_in
         
         Write-Verbose "Received API token from $($PtConfig.Url)"
-        Write-Verbose "Expires in ~$((New-TimeSpan -Seconds $PtConfig.Token.ExpiresIn).TotalHours) hours."
+        Write-Verbose "Expires in ~$((New-TimeSpan -Seconds $PtConfig.Token.ExpiresIn).TotalHours.tostring("#.##")) hours."
     }
     catch {
         throw $_
     }
 }
+#endregion Helper Functions
 
+#region Main Functions
 Function Add-PtVideoToPlaylist {
     [CmdletBinding()]
     param(
@@ -299,7 +306,7 @@ Function Get-PtAccountVideos {
     Write-Debug "PSBoundParameters: $($PSBoundParameters | Out-String)"
 
     $Url = "$($PtConfig.ApiUrl)/accounts/$Name/videos"
-    $Result = Invoke-PtApiRequest -Uri $Url | ConvertTo-PtVideo
+    $Result = Invoke-PtApiRequest -Uri $Url | ConvertTo-PtObject -Type Video
 
     return $Result
 }
@@ -312,7 +319,7 @@ Function Get-PtMyVideos {
     Write-Debug "PSBoundParameters: $($PSBoundParameters | Out-String)"
 
     $Url = "$($PtConfig.ApiUrl)/users/me/videos"
-    $Result = Invoke-PtApiRequest -Uri $Url
+    $Result = Invoke-PtApiRequest -Uri $Url | ConvertTo-PtObject -Type Video
 
     return $Result
 }
@@ -328,7 +335,7 @@ Function Get-PtVideoChannels {
     if ($Name) {
         $Url += "/$Name"
     }
-    $Result = Invoke-PtApiRequest -Uri $Url
+    $Result = Invoke-PtApiRequest -Uri $Url | ConvertTo-PtObject -Type VideoChannel
 
 
     return $Result
@@ -345,7 +352,7 @@ Function Get-PtVideo {
         $Url += "/$Id"
     }
 
-    $Result = Invoke-PtApiRequest -Uri $Url | ConvertTo-PtVideo
+    $Result = Invoke-PtApiRequest -Uri $Url | ConvertTo-PtObject -Type Video
 
     return $Result
 }
@@ -361,11 +368,10 @@ Function Get-PtVideoPlaylist {
         $Url += "/$Id"
     }
 
-    $Result = Invoke-PtApiRequest -Uri $Url
+    $Result = Invoke-PtApiRequest -Uri $Url | ConvertTo-PtObject -Type VideoPlaylist
 
     return $Result
 }
-
 
 Function Get-PtVideoPrivacyPolicies {
     [CmdletBinding()]
@@ -373,7 +379,7 @@ Function Get-PtVideoPrivacyPolicies {
 
     $Url = "$($PtConfig.ApiUrl)/videos/privacies"
 
-    $Result = Invoke-PtApiRequest -Uri $Url | ConvertTo-Json | ConvertFrom-Json -AsHashtable
+    $Result = Invoke-PtApiRequest -Uri $Url | ConvertTo-PtObject -Type VideoPrivacyPolicy
 
     # inverting int levels and string levels in the hashtable for easier
     $PrivacyLevels = [ordered]@{}
@@ -413,7 +419,6 @@ Function Publish-PtVideo {
         $Resumable
     )
 
-    
     $RestParams = @{
         Method = "POST"
     }
@@ -569,4 +574,4 @@ Function Set-PtVideo {
 
     return $Result
 }
-
+#endregion Main Functions
