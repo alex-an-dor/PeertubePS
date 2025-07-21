@@ -10,6 +10,20 @@
     }
 }
 
+enum PlaylistPrivacyLevels {
+    Public = 1
+    Unlisted = 2
+    Private = 3
+}
+
+enum VideoPrivacyLevels {
+    Public = 1
+    Unlisted = 2
+    Private = 3
+    Internal = 4
+    PasswordProtected = 5
+}
+
 #region Converters
 Function ConvertTo-PtObject {
     # no need for separate converters for now - 
@@ -66,8 +80,7 @@ Function Invoke-PtApiRequestSimple {
     try {
         $Response = Invoke-WebRequest @RestParams
         return $Response
-    }
-    catch {
+    } catch {
         Write-Error $_
     }
 }
@@ -107,8 +120,7 @@ Function Invoke-PtApiRequest {
         $Headers = @{
             Authorization = "Bearer $($PtConfig.Token.Access)"
         }
-    }
-    else {
+    } else {
         $Headers.Add("Authorization", "Bearer $($PtConfig.Token.Access)")
     }
 
@@ -127,8 +139,7 @@ Function Invoke-PtApiRequest {
         if (!$ContentType -and ($Headers.Keys.GetEnumerator() -notcontains "Content-Type")) {
             Write-Debug "Setting `"application/json`" content type"
             $ContentType = "application/json"
-        }
-        else {
+        } else {
             $ContentType = $null
         }
         #Write-Debug "Request Body: $($RestParams.Body | Out-String)"
@@ -154,8 +165,10 @@ Function Invoke-PtApiRequest {
         $Response = Invoke-WebRequest @RestParams
         $Result = [ordered]@{}
         $TextInfo = (Get-Culture).TextInfo
-        ($Response.Content | ConvertFrom-Json -AsHashtable).GetEnumerator() | ForEach-Object {
-            $Result[$TextInfo.ToTitleCase($_.Key)] = $_.Value
+        if ($Response.Content) {
+            ($Response.Content | ConvertFrom-Json -AsHashtable).GetEnumerator() | ForEach-Object {
+                $Result[$TextInfo.ToTitleCase($_.Key)] = $_.Value
+            }
         }
         Write-Debug "Last request's status code: $StatusCode"
         Write-Debug "Last request's response headers: $($RespHeaders | Out-String)"
@@ -187,8 +200,7 @@ Function Invoke-PtApiRequest {
                     ($Response.Content | ConvertFrom-Json -AsHashtable).GetEnumerator() | ForEach-Object {
                         $Result[$TextInfo.ToTitleCase($_.Key)] = $_.Value
                     }
-                }
-                catch {
+                } catch {
                     break
                 }
 
@@ -200,8 +212,7 @@ Function Invoke-PtApiRequest {
                 return $Response.Headers
             }
             return $Results
-        }
-        else {
+        } else {
             if ($PassThruRespHeaders) {
                 return $Response.Headers
             }
@@ -212,8 +223,7 @@ Function Invoke-PtApiRequest {
 
             return $Result
         }
-    }
-    catch {
+    } catch {
         Write-Error $_
     }
 }
@@ -248,8 +258,7 @@ Function Set-PtSettings {
         
         Write-Verbose "Received API token from $($PtConfig.Url)"
         Write-Verbose "Expires in ~$((New-TimeSpan -Seconds $PtConfig.Token.ExpiresIn).TotalHours.tostring("#.##")) hours."
-    }
-    catch {
+    } catch {
         throw $_
     }
 }
@@ -382,11 +391,56 @@ Function Get-PtVideoPrivacyPolicies {
     $Result = Invoke-PtApiRequest -Uri $Url | ConvertTo-PtObject -Type VideoPrivacyPolicy
 
     # inverting int levels and string levels in the hashtable for easier
-    $PrivacyLevels = [ordered]@{}
-    $Result.GetEnumerator() | Sort-Object $_.Value | ForEach-Object {
-        $PrivacyLevels.Add($_.Value, $_.Key)
+    # $PrivacyLevels = [ordered]@{}
+    # $Result.GetEnumerator() | Sort-Object $_.Value | ForEach-Object {
+    #     $PrivacyLevels.Add($_.Value, $_.Key)
+    # }
+    # return $PrivacyLevels
+    return $Result
+}
+
+Function New-PtVideoPlaylist {
+    # $ThePlaylist = New-PtVideoPlaylist -DisplayName $PlaylistName -Privacy "Public" -VideoChannelId $ChannelId -PassThru
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [String]
+        $DisplayName,
+
+        $Privacy,
+
+        [String]
+        $Description,
+
+        $VideoChannelId,
+
+        [Switch]
+        $PassThru
+    )
+
+    $Uri = "$($PtConfig.ApiUrl)/video-playlists"
+
+    $Form = @{
+        displayName = $DisplayName
     }
-    return $PrivacyLevels
+
+    if ($Privacy) {
+        $Form.privacy = [int][VideoPrivacyLevels]::$Privacy
+    }
+
+    if ($Description) {
+        $Form.description = $Description
+    }
+
+    if ($VideoChannelId) {
+        $Form.videoChannelId = $VideoChannelId
+    }
+
+    $Result = Invoke-PtApiRequest -Uri $Uri -Method POST -Form $Form
+
+    if ($PassThru) {
+        return $($Result.videoPlaylist | ConvertTo-PtObject -Type VideoPlaylist)
+    }
 }
 
 Function Publish-PtVideo {
@@ -402,13 +456,13 @@ Function Publish-PtVideo {
         $ChannelId,
 
         [ValidateScript(
-            { $_ -in (Get-PtVideoPrivacyPolicies).Keys }
+            { $_ -in [VideoPrivacyLevels].GetEnumNames() }
         )]
         [ArgumentCompleter(
             {
                 param($cmd, $param, $wordToComplete)
                 # This is the duplicated part of the code in the [ValidateScipt] attribute.
-                [array] $validValues = (Get-PtVideoPrivacyPolicies).Keys
+                [array] $validValues = [VideoPrivacyLevels].GetEnumNames()
                 $validValues -like "$wordToComplete*" | ForEach-Object { "'$_'" }
             }
         )]
@@ -425,8 +479,7 @@ Function Publish-PtVideo {
 
     try {
         $LocalFile = Get-ChildItem $LocalPath
-    }
-    catch {
+    } catch {
         Write-Error $_
         return
     }
@@ -440,10 +493,10 @@ Function Publish-PtVideo {
             "X-Upload-Content-Type"   = "video/mp4"
         }
         $Body = @{
-            filename  = (Get-Item -Path $LocalPath).FullName
+            filename  = (Get-Item -LiteralPath $LocalPath).FullName
             channelId = $ChannelId
             name      = $Name
-            privacy   = $((Get-PtVideoPrivacyPolicies).GetEnumerator() | Where-Object { $_.Key -match $Privacy }).Value
+            privacy   = [int][VideoPrivacyLevels]::$Privacy
         }
         $RestParams = @{
             Uri                 = "$($PtConfig.ApiUrl)/videos/upload-resumable"
@@ -460,8 +513,7 @@ Function Publish-PtVideo {
         # sort of response uri location validation
         if ($RespHeaders.Location -match "^https:") {
             $UploadId = $(([uri]$RespHeaders.Location).Query.Split("="))[1]
-        }
-        else {
+        } else {
             $UploadLocation = "https:$($RespHeaders.Location)"
             $UploadId = $(([uri]$UploadLocation).Query.Split("="))[1]
         }
@@ -505,17 +557,15 @@ Function Publish-PtVideo {
             InFile = $LocalFile
         }
         Invoke-PtApiRequest @UploadRestParams
-        #$Offset += $ChunkSize
+        #$Offset += $ChunkSizeF
         #} while ($Offset -lt $LocalFile.Length)
-    }
-    else {
+    } else {
         $RestParams.Add("Uri", "$($PtConfig.ApiUrl)/videos/upload")
         $Form = @{
             videofile = Get-Item -Path $LocalPath
             channelId = $ChannelId
             name      = $Name
-            #TODO: enum на Set-PtSettings? А то страшно выглядит
-            privacy   = $((Get-PtVideoPrivacyPolicies).GetEnumerator() | Where-Object { $_.Key -match $Privacy }).Value
+            privacy   = [int][VideoPrivacyLevels]::$Privacy
         }
         $RestParams.Add("Form", $Form)
         $Result = Invoke-PtApiRequest @RestParams
@@ -538,13 +588,13 @@ Function Set-PtVideo {
         $Name,
 
         [ValidateScript(
-            { $_ -in (Get-PtVideoPrivacyPolicies).Keys }
+            { $_ -in [VideoPrivacyLevels].GetEnumNames() }
         )]
         [ArgumentCompleter(
             {
                 param($cmd, $param, $wordToComplete)
                 # This is the duplicated part of the code in the [ValidateScipt] attribute.
-                [array] $validValues = (Get-PtVideoPrivacyPolicies).Keys
+                [array] $validValues = [VideoPrivacyLevels].GetEnumNames()
                 $validValues -like "$wordToComplete*" | ForEach-Object { "'$_'" }
             }
         )]
@@ -567,7 +617,7 @@ Function Set-PtVideo {
         $Form.Add("name", $Name)
     }
     if ($Privacy) {
-        $Form.Add("privacy", $((Get-PtVideoPrivacyPolicies).GetEnumerator() | Where-Object { $_.Key -match $Privacy }).Value)
+        $Form.Add("privacy", [int][VideoPrivacyLevels]::$Privacy)
     }
     
     $Result = Invoke-PtApiRequest -Uri $Url -Method PUT -Form $Form
